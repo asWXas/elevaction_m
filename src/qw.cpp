@@ -32,23 +32,12 @@ public:
         double point_min_z = this->declare_parameter<double>("point_min_z", -1.0);
         double point_max_z = this->declare_parameter<double>("point_max_z", 1.0);
 
-        // ft 变换矩阵
-        double tf_x = this->declare_parameter<double>("tf_x",0.0);
-        double y = this->declare_parameter<double>("tf_y",0.0);
-        double z = this->declare_parameter<double>("tf_z",0.0);
-        double roll = this->declare_parameter<double>("tf_roll",0.0);
-        double pitch = this->declare_parameter<double>("tf_pitch",0.0);
-        double yaw = this->declare_parameter<double>("tf_yaw",0.0);
-        
-        // 从base坐标系转到imuframe坐标系的变换矩阵,在imu坐标下 裁减
-
-
-
-
         min_point << point_min_x, point_min_y, point_min_z, 1.0;
         max_point << point_max_x, point_max_y, point_max_z, 1.0;
 
         // 体素滤波器 大小
+        // 是否 降采样
+        downsample = this->declare_parameter<bool>("downsample", true);
         voxel_size_ = this->declare_parameter<double>("voxel_size", 0.01);
 
         // 2.5D 地图的相关参数
@@ -71,8 +60,8 @@ public:
         publisher_obstacle_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/groud_cloud", 10);
         RCLCPP_INFO(this->get_logger(), "Point cloud processor node has started.");
 
-        // thread_ = std::thread(&PointCloudProcessor::task, this);
-        // thread_.detach();
+        thread_ = std::thread(&PointCloudProcessor::task, this);
+        thread_.detach();
     }
 
 private:
@@ -325,38 +314,21 @@ private:
 
         crop_box_filter.setMin(min_point);
         crop_box_filter.setMax(max_point);
-        
-        // 执行滤波
         crop_box_filter.filter(*pcl_cloud_cropped);
 
-        // 3. 将滤波后的 PCL PointCloud 转换回 ROS 2 PointCloud2 消息
-        sensor_msgs::msg::PointCloud2 output_msg;
-
-        // 4. 体素滤波器
-        pcl::VoxelGrid<pcl::PointXYZ> voxel_grid_filter;
-        voxel_grid_filter.setInputCloud(pcl_cloud_cropped);
-        voxel_grid_filter.setLeafSize(voxel_size_,voxel_size_,voxel_size_);
-        voxel_grid_filter.filter(*pcl_cloud_cropped);
-
-        // 5. 发布滤波后的点云
-        pcl::toROSMsg(*pcl_cloud_cropped, output_msg);
-        output_msg.header.frame_id = output_topic_frame;
-        publisher_->publish(output_msg);
-
-        // std::cout << "PointCloud after voxel grid filtering: " << pcl_cloud_cropped->size() << " data points." << std::endl;
-        // mutex_ 锁住 publisher_ 发布器
-        // 发布裁剪后的点云
-        // TODO: 每个点都是 和 素体大小相同的 方格 marker
-        
-
-
-
-
+        if(downsample)
+        {
+            // 4. 体素滤波器
+            pcl::VoxelGrid<pcl::PointXYZ> voxel_grid_filter;
+            voxel_grid_filter.setInputCloud(pcl_cloud_cropped);
+            voxel_grid_filter.setLeafSize(voxel_size_,voxel_size_,voxel_size_);
+            voxel_grid_filter.filter(*pcl_cloud_cropped);
+        }
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
             cloud = pcl_cloud_cropped;
-        }        
+        }  
     }
 
     std::mutex mutex_;
@@ -384,6 +356,7 @@ private:
     float maxGroundHeight; // 地面高度
     int planarVoxelHalfWidth;
     int kPlanarVoxelNum; 
+    bool downsample;
 
     // 位置信息
     Eigen::Vector3d position;
